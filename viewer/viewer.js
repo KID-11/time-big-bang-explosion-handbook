@@ -1,7 +1,12 @@
 async function loadTOC() {
   const res = await fetch('/toc.json', { cache: 'no-store' });
   const data = await res.json(); // [{title, url, children:[...]}]
+
   const toc = document.getElementById('toc');
+  if (!Array.isArray(data) || data.length === 0) {
+    toc.innerHTML = '<p>未找到目录文件（.hhc）或入口页。</p>';
+    return;
+  }
 
   function makeTree(nodes) {
     const ul = document.createElement('ul');
@@ -12,8 +17,7 @@ async function loadTOC() {
       if (n.url) {
         a.href = n.url;
         a.target = 'viewer';
-        a.addEventListener('click', (e) => {
-          // 让地址栏反映当前文档（可刷新恢复）
+        a.addEventListener('click', () => {
           history.replaceState(null, '', '#'+encodeURIComponent(n.url));
         });
       }
@@ -26,19 +30,10 @@ async function loadTOC() {
 
   toc.appendChild(makeTree(data));
 
-  // 初始载入
+  // 初始载入：优先 hash，其次目录第一个页面
   const initial = decodeURIComponent(location.hash.slice(1));
-  const url = initial || (findFirstUrl(data) || '');
+  const url = initial || findFirstUrl(data) || '';
   if (url) document.getElementById('viewer').src = url;
-
-  // 简单标题搜索
-  document.getElementById('search').addEventListener('input', (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    for (const link of toc.querySelectorAll('a')) {
-      const hit = link.textContent.toLowerCase().includes(q);
-      link.parentElement.style.display = hit || q==='' ? '' : 'none';
-    }
-  });
 }
 
 function findFirstUrl(nodes) {
