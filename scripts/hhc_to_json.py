@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 从解压目录中递归查找 .hhc/.hhk（CHM 目录），解析为 toc.json。
-若没有 .hhc/.hhk，则递归寻找一个最可能的入口页（index/default/home…），作为单页目录。
+若没有 .hhc/.hhk，则递归寻找 index/default/home/start… 作为入口页。
 用法：python scripts/hhc_to_json.py publish
 """
 import os, sys, json
-
 from html.parser import HTMLParser
 
 POSSIBLE_ENTRY = (
@@ -57,7 +56,6 @@ class HHCParser(HTMLParser):
         return self.stack[0]
 
 def find_first(root, exts):
-    """递归寻找符合扩展名的第一个文件，返回相对路径"""
     for base, _, files in os.walk(root):
         for f in files:
             low = f.lower()
@@ -66,13 +64,11 @@ def find_first(root, exts):
     return None
 
 def find_entry(root):
-    # 优先在每个目录里找常见入口名
     for base, _, files in os.walk(root):
         lowset = {f.lower(): f for f in files}
         for cand in POSSIBLE_ENTRY:
             if cand in lowset:
                 return os.path.relpath(os.path.join(base, lowset[cand]), root)
-    # 实在没有就找任意一个 html
     return find_first(root, ('.html', '.htm'))
 
 def parse_hhc(hhc_path, pub_root):
@@ -90,14 +86,13 @@ def parse_hhc(hhc_path, pub_root):
     parser = HHCParser()
     parser.feed(txt)
     data = parser.get_result()
-    # 清理空 title，用 url 顶上
+
     def fix(nodes):
         for n in nodes:
             if not n.get('title'):
                 n['title'] = n.get('url') or 'Untitled'
-            # 标准化 URL（相对路径）
             if n.get('url'):
-                n['url'] = n['url'].lstrip('/')
+                n['url'] = n['url'].lstrip('/').replace('\\','/')
             if n.get('children'):
                 fix(n['children'])
     fix(data)
@@ -109,18 +104,14 @@ def main():
         sys.exit(1)
     pub = sys.argv[1]
 
-    # 1) 递归找 .hhc / .hhk
     hhc_rel = find_first(pub, ('.hhc', '.hhk'))
-
     if hhc_rel:
         data = parse_hhc(hhc_rel, pub)
     else:
-        # 2) 没有目录文件，构建最小 toc：递归找入口页
         entry = find_entry(pub)
         if entry:
             data = [{'title': '首页', 'url': entry.replace('\\','/'), 'children': []}]
         else:
-            # 连 html 都没有，生成一个空的 toc（防前端报错）
             data = []
 
     out = os.path.join(pub, 'toc.json')
