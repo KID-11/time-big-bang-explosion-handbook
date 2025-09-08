@@ -34,9 +34,8 @@ jobs:
             echo "source/latest.chm not found"; exit 1;
           fi
           7z x "source/latest.chm" -o"publish" -y
-        shell: bash
 
-      - name: Generate toc.json from .hhc (recursive)
+      - name: Generate toc.json (recursive)
         run: |
           python3 scripts/hhc_to_json.py publish
 
@@ -44,6 +43,7 @@ jobs:
         run: |
           cp -r viewer/* publish/
 
+      # —— 调试可选（建议保留，方便排错）——
       - name: Show publish tree (for debugging)
         run: |
           echo "== PUBLISH TREE =="
@@ -51,21 +51,21 @@ jobs:
           echo "== HEAD of toc.json =="
           head -n 50 publish/toc.json || true
 
-      - name: Upload publish as artifact (inspect files)
-        uses: actions/upload-artifact@v4
+      # —— 用 Netlify CLI 部署（不再用 netlify/actions@v4）——
+      - name: Setup Node (for Netlify CLI)
+        uses: actions/setup-node@v4
         with:
-          name: publish-preview
-          path: publish
-          retention-days: 3
+          node-version: '20'
 
-      - name: Clean sensitive artifacts
-        run: |
-          rm -f publish/*.chm || true
+      - name: Install Netlify CLI
+        run: npm install -g netlify-cli
 
-      - name: Deploy to Netlify
-        uses: netlify/actions/cli@v4
-        with:
-          args: deploy --dir=publish --prod
+      - name: Deploy to Netlify (Production)
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          netlify deploy \
+            --dir=publish \
+            --prod \
+            --site="$NETLIFY_SITE_ID"
