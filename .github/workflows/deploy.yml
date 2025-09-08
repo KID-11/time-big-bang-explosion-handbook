@@ -43,7 +43,6 @@ jobs:
         run: |
           cp -r viewer/* publish/
 
-      # —— 调试可选（建议保留，方便排错）——
       - name: Show publish tree (for debugging)
         run: |
           echo "== PUBLISH TREE =="
@@ -51,7 +50,6 @@ jobs:
           echo "== HEAD of toc.json =="
           head -n 50 publish/toc.json || true
 
-      # —— 用 Netlify CLI 部署（不再用 netlify/actions@v4）——
       - name: Setup Node (for Netlify CLI)
         uses: actions/setup-node@v4
         with:
