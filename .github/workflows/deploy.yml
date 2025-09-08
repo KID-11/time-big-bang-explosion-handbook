@@ -1,0 +1,71 @@
+name: Extract CHM & Deploy to Netlify
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "source/**"
+      - "viewer/**"
+      - "scripts/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install 7zip and Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full python3
+
+      - name: Prepare publish directory
+        run: |
+          rm -rf publish
+          mkdir -p publish
+
+      - name: Extract CHM → publish/
+        run: |
+          if [ ! -f "source/latest.chm" ]; then
+            echo "source/latest.chm not found"; exit 1;
+          fi
+          7z x "source/latest.chm" -o"publish" -y
+        shell: bash
+
+      - name: Generate toc.json from .hhc (recursive)
+        run: |
+          python3 scripts/hhc_to_json.py publish
+
+      - name: Copy viewer assets
+        run: |
+          cp -r viewer/* publish/
+
+      - name: Show publish tree (for debugging)
+        run: |
+          echo "== PUBLISH TREE =="
+          (command -v tree && tree -a publish || find publish -maxdepth 3 -type f | sed 's|^| - |')
+          echo "== HEAD of toc.json =="
+          head -n 50 publish/toc.json || true
+
+      - name: Upload publish as artifact (inspect files)
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-preview
+          path: publish
+          retention-days: 3
+
+      - name: Clean sensitive artifacts
+        run: |
+          rm -f publish/*.chm || true
+
+      - name: Deploy to Netlify
+        uses: netlify/actions/cli@v4
+        with:
+          args: deploy --dir=publish --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
