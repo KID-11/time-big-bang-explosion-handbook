@@ -1,49 +1,51 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从解压目录中查找 .hhc/.hhk，解析为 toc.json（层级结构）。
+从解压目录中递归查找 .hhc/.hhk（CHM 目录），解析为 toc.json。
+若没有 .hhc/.hhk，则递归寻找 index/default/home/start… 作为入口页。
 用法：python scripts/hhc_to_json.py publish
 """
-import os, sys, json, re
-
+import os, sys, json
 from html.parser import HTMLParser
+
+POSSIBLE_ENTRY = (
+    "index.html","index.htm",
+    "default.html","default.htm",
+    "home.html","home.htm",
+    "start.html","start.htm"
+)
 
 class HHCParser(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.stack = [[]]  # 栈顶是当前层级的 children 列表
+        self.stack = [[]]
         self.current = None
         self.in_object = False
-        self.in_param = False
-        self.param_name = None
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag.lower() == 'ul':
+        tag = tag.lower()
+        if tag == 'ul':
             self.stack.append([])
-        elif tag.lower() == 'object' and attrs.get('type','').lower() == 'text/sitemap':
+        elif tag == 'object' and attrs.get('type','').lower() == 'text/sitemap':
             self.current = {'title': None, 'url': None, 'children': []}
             self.in_object = True
-        elif self.in_object and tag.lower() == 'param':
-            # <param name="Name" value="xxx"> / <param name="Local" value="path.htm">
-            name = attrs.get('name') or attrs.get('NAME')
-            value = attrs.get('value') or attrs.get('VALUE')
-            if name:
-                if name.lower() == 'name':
-                    self.current['title'] = value
-                elif name.lower() == 'local':
-                    self.current['url'] = value.lstrip('/')
-        # 其他标签不关心
+        elif self.in_object and tag == 'param':
+            name = (attrs.get('name') or attrs.get('NAME') or '').lower()
+            value = (attrs.get('value') or attrs.get('VALUE') or '')
+            if name == 'name':
+                self.current['title'] = value
+            elif name == 'local':
+                self.current['url'] = value.lstrip('/')
 
     def handle_endtag(self, tag):
-        if tag.lower() == 'ul':
+        tag = tag.lower()
+        if tag == 'ul':
             children = self.stack.pop()
-            # 把 children 放到上一层最后一个节点的 children 里（若存在）
-            if len(self.stack[-1]) > 0:
+            if self.stack[-1]:
                 self.stack[-1][-1]['children'] = children
-        elif tag.lower() == 'object' and self.in_object:
+        elif tag == 'object' and self.in_object:
             if self.current:
-                # 清理空 children
                 if not self.current.get('children'):
                     self.current['children'] = []
                 self.stack[-1].append(self.current)
@@ -53,52 +55,69 @@ class HHCParser(HTMLParser):
     def get_result(self):
         return self.stack[0]
 
-def find_hhc(root):
-    # 优先 .hhc，再尝试 .hhk
-    for name in os.listdir(root):
-        if name.lower().endswith('.hhc'):
-            return os.path.join(root, name)
-    for name in os.listdir(root):
-        if name.lower().endswith('.hhk'):
-            return os.path.join(root, name)
+def find_first(root, exts):
+    for base, _, files in os.walk(root):
+        for f in files:
+            low = f.lower()
+            if any(low.endswith(ext) for ext in exts):
+                return os.path.relpath(os.path.join(base, f), root)
     return None
+
+def find_entry(root):
+    for base, _, files in os.walk(root):
+        lowset = {f.lower(): f for f in files}
+        for cand in POSSIBLE_ENTRY:
+            if cand in lowset:
+                return os.path.relpath(os.path.join(base, lowset[cand]), root)
+    return find_first(root, ('.html', '.htm'))
+
+def parse_hhc(hhc_path, pub_root):
+    with open(os.path.join(pub_root, hhc_path), 'rb') as f:
+        raw = f.read()
+    txt = None
+    for enc in ('utf-8','gbk','gb2312','cp936','big5'):
+        try:
+            txt = raw.decode(enc)
+            break
+        except:
+            pass
+    if txt is None:
+        txt = raw.decode('latin1', errors='ignore')
+    parser = HHCParser()
+    parser.feed(txt)
+    data = parser.get_result()
+
+    def fix(nodes):
+        for n in nodes:
+            if not n.get('title'):
+                n['title'] = n.get('url') or 'Untitled'
+            if n.get('url'):
+                n['url'] = n['url'].lstrip('/').replace('\\','/')
+            if n.get('children'):
+                fix(n['children'])
+    fix(data)
+    return data
 
 def main():
     if len(sys.argv) < 2:
         print('Usage: python scripts/hhc_to_json.py <publish-dir>')
         sys.exit(1)
     pub = sys.argv[1]
-    hhc = find_hhc(pub)
-    if not hhc:
-        # 没有目录文件，尝试以 index.htm(l) 构建一个最简单目录
-        index_file = None
-        for cand in ('index.html','index.htm','default.html','default.htm'):
-            p = os.path.join(pub, cand)
-            if os.path.exists(p):
-                index_file = cand
-                break
-        data = [{'title': '首页', 'url': index_file or '', 'children': []}]
+
+    hhc_rel = find_first(pub, ('.hhc', '.hhk'))
+    if hhc_rel:
+        data = parse_hhc(hhc_rel, pub)
     else:
-        with open(hhc, 'rb') as f:
-            raw = f.read()
-        # 尝试按常见编码解码（CHM 常见为 gbk/gb2312）
-        txt = None
-        for enc in ('utf-8', 'gbk', 'gb2312', 'cp936'):
-            try:
-                txt = raw.decode(enc)
-                break
-            except:
-                continue
-        if txt is None:
-            txt = raw.decode('latin1', errors='ignore')
-        parser = HHCParser()
-        parser.feed(txt)
-        data = parser.get_result()
+        entry = find_entry(pub)
+        if entry:
+            data = [{'title': '首页', 'url': entry.replace('\\','/'), 'children': []}]
+        else:
+            data = []
 
     out = os.path.join(pub, 'toc.json')
     with open(out, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print('Wrote', out)
+    print('Wrote', out, 'with', len(data), 'root items.')
 
 if __name__ == '__main__':
     main()
