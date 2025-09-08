@@ -33,11 +33,14 @@ jobs:
           if [ ! -f "source/latest.chm" ]; then
             echo "source/latest.chm not found"; exit 1;
           fi
-          # 使用 extract_chmLib（更兼容 CHM）
-          extract_chmLib source/latest.chm publish/ || {
-            echo "extract_chmLib failed"; exit 2;
-          }
-        shell: bash
+          # 使用 extract_chmLib（比 7z 更兼容 CHM）
+          extract_chmLib source/latest.chm publish/
+
+      - name: Clean invalid files
+        run: |
+          echo "清理 #WINDOWS 等非法目录和文件..."
+          find publish -type d -name '#WINDOWS' -exec rm -rf {} +
+          find publish -type f \( -name '*#*' -o -name '*?*' \) -delete
 
       - name: Generate toc.json (recursive)
         run: |
