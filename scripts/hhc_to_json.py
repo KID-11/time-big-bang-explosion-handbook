@@ -1,247 +1,227 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-解析 publish/ 下的 .hhc/.hhk（优先），生成 publish/toc.json。
-若没有 .hhc/.hhk，则按文件夹/HTML 文件结构生成目录树（数组形式）。
-输出格式：list of { title, url, children }
-用法：python3 scripts/hhc_to_json.py publish
+增强版CHM内容扫描器 - 无论有没有.hhc文件都能工作
 """
-import os, sys, json, re, html
+import os
+import sys
+import json
+import re
 from html.parser import HTMLParser
 
-# 尝试的编码顺序
-ENCODINGS = ['utf-8', 'utf-16', 'cp1252', 'cp936', 'gbk', 'gb2312', 'big5', 'latin1']
-
-HTML_EXTS = ('.htm', '.html', '.xhtml')
-
-def read_text_try(path):
-    raw = open(path, 'rb').read()
-    for enc in ENCODINGS:
-        try:
-            return raw.decode(enc)
-        except Exception:
-            continue
-    # 最后保险回退
-    return raw.decode('latin1', errors='replace')
-
-class RobustTOCParser(HTMLParser):
-    """
-    尝试解析两类结构：
-      1) .hhc 的 object/param (text/sitemap)
-      2) 普通 <a href="...">Title</a> 列表（li/ul 嵌套）
-    结果是一个树：list of nodes (dicts)
-    """
+class HHCParser(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.stack = [[]]   # 每遇到 ul/ol 就 push, pop -> 子项归属
-        self.current_object = None
-        self.current_anchor = None
-        self.capture_anchor_text = False
+        self.stack = [[]]
+        self.current = None
+        self.in_object = False
 
     def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
         tag = tag.lower()
-        attrs = dict((k.lower(), v) for k, v in attrs)
-        if tag in ('ul', 'ol'):
+        if tag == 'ul':
             self.stack.append([])
-        elif tag == 'object' and attrs.get('type', '').lower() == 'text/sitemap':
-            self.current_object = {'title': None, 'url': None, 'children': []}
-        elif tag == 'param' and self.current_object is not None:
-            name = attrs.get('name', '').lower()
-            val = attrs.get('value', '') or attrs.get('VALUE', '')
-            val = html.unescape(val)
+        elif tag == 'object' and attrs.get('type','').lower() == 'text/sitemap':
+            self.current = {'title': None, 'url': None, 'children': []}
+            self.in_object = True
+        elif self.in_object and tag == 'param':
+            name = (attrs.get('name') or attrs.get('NAME') or '').lower()
+            value = (attrs.get('value') or attrs.get('VALUE') or '')
             if name == 'name':
-                self.current_object['title'] = val
-            elif name in ('local', 'url'):
-                self.current_object['url'] = val
-        elif tag == 'a':
-            href = attrs.get('href', '')
-            href = html.unescape(href)
-            self.current_anchor = {'title': None, 'url': href, 'children': []}
-            self.capture_anchor_text = True
+                self.current['title'] = value
+            elif name == 'local':
+                self.current['url'] = value.lstrip('/')
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-        if tag in ('ul', 'ol'):
-            children = self.stack.pop()
-            if self.stack and self.stack[-1]:
-                # 把 children 赋给上层最后一个节点
-                parent = self.stack[-1][-1]
-                parent['children'] = children
-        elif tag == 'object':
-            if self.current_object is not None:
-                if not self.current_object.get('title'):
-                    self.current_object['title'] = self.current_object.get('url') or 'Untitled'
-                self.stack[-1].append(self.current_object)
-            self.current_object = None
-        elif tag == 'a':
-            if self.current_anchor is not None:
-                if not self.current_anchor.get('title'):
-                    # 用文件名代替 title（尽量友好）
-                    t = self.current_anchor.get('url') or ''
-                    t = os.path.basename(t) or t or 'Untitled'
-                    self.current_anchor['title'] = t
-                self.stack[-1].append(self.current_anchor)
-            self.current_anchor = None
-            self.capture_anchor_text = False
-
-    def handle_data(self, data):
-        if self.capture_anchor_text and self.current_anchor is not None:
-            # 累计锚文本
-            text = (self.current_anchor.get('title') or '') + data
-            self.current_anchor['title'] = text.strip()
+        if tag == 'ul':
+            if len(self.stack) > 1:  # 防止栈空
+                children = self.stack.pop()
+                if self.stack and self.stack[-1] and self.stack[-1][-1]:
+                    self.stack[-1][-1]['children'] = children
+        elif tag == 'object' and self.in_object:
+            if self.current:
+                if not self.current.get('children'):
+                    self.current['children'] = []
+                if self.stack and len(self.stack) > 0:
+                    self.stack[-1].append(self.current)
+            self.current = None
+            self.in_object = False
 
     def get_result(self):
-        return self.stack[0]
+        return self.stack[0] if self.stack else []
 
-def find_first_by_ext(root, exts):
-    for base, _, files in os.walk(root):
-        for f in files:
-            low = f.lower()
-            if any(low.endswith(ext) for ext in exts):
-                return os.path.relpath(os.path.join(base, f), root)
+def scan_all_html_files(root_dir):
+    """扫描所有HTML文件并创建目录树"""
+    html_files = []
+    
+    # 找出所有HTML文件
+    for dirpath, _, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if filename.lower().endswith(('.htm', '.html')):
+                full_path = os.path.join(dirpath, filename)
+                rel_path = os.path.relpath(full_path, root_dir)
+                
+                # 尝试从HTML文件提取标题
+                title = extract_html_title(full_path) or os.path.splitext(filename)[0]
+                
+                html_files.append({
+                    'title': title,
+                    'url': rel_path.replace('\\', '/'),
+                    'children': []
+                })
+    
+    # 按URL排序（通常能保持一定的层次结构）
+    html_files.sort(key=lambda x: x['url'])
+    
+    # 如果过多，只保留前100个
+    if len(html_files) > 100:
+        print(f"警告：发现{len(html_files)}个HTML文件，限制为前100个")
+        html_files = html_files[:100]
+    
+    return html_files
+
+def extract_html_title(html_path):
+    """从HTML文件中提取标题"""
+    try:
+        with open(html_path, 'rb') as f:
+            content = f.read(8192)  # 只读取开头部分
+            
+        # 尝试不同编码
+        for encoding in ['utf-8', 'gbk', 'gb2312', 'cp936', 'big5', 'latin1']:
+            try:
+                text = content.decode(encoding)
+                match = re.search(r'<title[^>]*>(.*?)</title>', text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    title = match.group(1).strip()
+                    return title
+            except:
+                continue
+    except:
+        pass
     return None
 
-def normalize_href(href):
-    if not href:
-        return None
-    href = href.strip()
-    # 去掉 mk:@MSITStore:, ms-its:, file:// 等前缀
-    # 若包含 ::/ 或 :: 后面通常是真实文件路径，取后面部分
-    m = re.search(r'::/+(.*)$', href)
-    if not m:
-        m = re.search(r'::(.*)$', href)
-    if m:
-        href = m.group(1)
-    # 去掉 leading slashes and drive letters, 但保留 http(s) 等外部链接
-    if re.match(r'^https?://', href, flags=re.I):
-        return href
-    # 去掉 fragment (? 和 #) 但保留用于后续匹配；实际文件存在性检查会切掉 fragment
-    href = href.lstrip('/\\')
-    href = href.replace('\\', '/')
-    return href
+def find_hhc_file(root):
+    """查找.hhc文件"""
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if filename.lower().endswith('.hhc'):
+                return os.path.join(dirpath, filename)
+    return None
 
-def resolve_to_existing(root, href):
-    """
-    尽力把 href 映射到 publish 下存在的文件（相对路径）。
-    如果找不到，返回 normalize 后的 href（尽量可用）。
-    """
-    if not href:
-        return None
-    href = href.split('#')[0].split('?')[0]
-    href_norm = href
-    # 若为外部链接（http:// 等），直接返回
-    if re.match(r'^[a-z]+://', href_norm, flags=re.I):
-        return href_norm
-    # 尝试直接存在
-    candidate = os.path.normpath(os.path.join(root, href_norm))
-    if os.path.exists(candidate):
-        return os.path.relpath(candidate, root).replace('\\', '/')
-    # 否则尝试 basename 匹配（大小写不敏感）
-    bname = os.path.basename(href_norm).lower()
-    for base, _, files in os.walk(root):
-        for f in files:
-            if f.lower() == bname:
-                return os.path.relpath(os.path.join(base, f), root).replace('\\', '/')
-    # 再尝试去掉可能的 query/hash 之后的片段（已处理），最后退回原始 href_norm
-    return href_norm.replace('\\', '/')
+def parse_hhc_file(hhc_path):
+    """解析.hhc文件为目录结构"""
+    try:
+        with open(hhc_path, 'rb') as f:
+            content = f.read()
+            
+        # 尝试多种编码
+        text = None
+        for encoding in ['utf-8', 'gbk', 'gb2312', 'cp936', 'big5']:
+            try:
+                text = content.decode(encoding)
+                break
+            except:
+                continue
+                
+        if text is None:
+            text = content.decode('latin1', errors='ignore')
+            
+        parser = HHCParser()
+        parser.feed(text)
+        result = parser.get_result()
+        
+        # 修复相对路径
+        def fix_paths(items):
+            for item in items:
+                if 'url' in item and item['url']:
+                    item['url'] = item['url'].replace('\\', '/').lstrip('/')
+                if 'children' in item and item['children']:
+                    fix_paths(item['children'])
+        
+        fix_paths(result)
+        return result
+    except Exception as e:
+        print(f"解析.hhc文件失败: {e}")
+        return []
 
-def fix_nodes(nodes, root):
-    # 递归修正 title/url，并解析相对路径
-    for n in nodes:
-        if not n.get('title'):
-            n['title'] = n.get('url') or 'Untitled'
-        if n.get('url'):
-            raw = n['url']
-            norm = normalize_href(raw)
-            resolved = resolve_to_existing(root, norm)
-            n['url'] = resolved
-        # 递归
-        if n.get('children'):
-            fix_nodes(n['children'], root)
-
-def build_tree_from_files(root):
-    # 把所有 html 文件按目录构造成树
-    files = []
-    for base, _, filenames in os.walk(root):
-        for f in filenames:
-            if f.lower().endswith(HTML_EXTS):
-                files.append(os.path.relpath(os.path.join(base, f), root).replace('\\', '/'))
-    files.sort()
-    nodes = []
-    for rel in files:
-        parts = rel.split('/')
-        cur = nodes
-        for i, part in enumerate(parts):
-            if i == len(parts) - 1:
-                # 文件节点
-                title = os.path.splitext(part)[0]
-                cur.append({'title': title, 'url': rel, 'children': []})
-            else:
-                # 目录节点：在 cur 中查找
-                found = None
-                for it in cur:
-                    if it.get('title') == part and it.get('children') is not None:
-                        found = it
-                        break
-                if not found:
-                    found = {'title': part, 'url': None, 'children': []}
-                    cur.append(found)
-                cur = found['children']
-    return nodes
-
-def parse_hhc_file(hhc_path, root):
-    txt = read_text_try(hhc_path)
-    parser = RobustTOCParser()
-    parser.feed(txt)
-    data = parser.get_result()
-    # 若解析为空，尝试用简单的正则抓 <param name="Name" value="..."> 情况（作为兜底）
-    if not data:
-        params = re.findall(r'<param[^>]+name=["\']?name["\']?[^>]*value=["\']([^"\']+)["\']', txt, flags=re.I)
-        locals_ = re.findall(r'<param[^>]+name=["\']?local["\']?[^>]*value=["\']([^"\']+)["\']', txt, flags=re.I)
-        if params and locals_:
-            # 简单配对
-            pairs = zip(params, locals_)
-            for title, url in pairs:
-                data.append({'title': html.unescape(title), 'url': html.unescape(url), 'children': []})
-    # 规范化
-    fix_nodes(data, root)
-    return data
+def find_index_file(root):
+    """查找索引文件"""
+    index_candidates = [
+        'index.html', 'index.htm', 
+        'default.html', 'default.htm',
+        'home.html', 'home.htm',
+        'start.html', 'start.htm',
+        'main.html', 'main.htm',
+        'welcome.html', 'welcome.htm'
+    ]
+    
+    # 先在根目录查找
+    for candidate in index_candidates:
+        if os.path.exists(os.path.join(root, candidate)):
+            return candidate
+            
+    # 递归查找任何目录下的索引文件
+    for dirpath, _, filenames in os.walk(root):
+        for candidate in index_candidates:
+            if candidate in filenames:
+                return os.path.relpath(os.path.join(dirpath, candidate), root).replace('\\', '/')
+                
+    # 找第一个html文件
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if filename.lower().endswith(('.htm', '.html')):
+                return os.path.relpath(os.path.join(dirpath, filename), root).replace('\\', '/')
+                
+    return None
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 scripts/hhc_to_json.py <publish-dir>")
+        print("用法: python3 hhc_to_json.py <发布目录>")
         sys.exit(1)
-    root = sys.argv[1]
-    if not os.path.isdir(root):
-        print("Error: publish dir not found:", root)
-        sys.exit(2)
+        
+    pub_dir = sys.argv[1]
+    
+    # 查找.hhc文件
+    hhc_path = find_hhc_file(pub_dir)
+    toc_data = []
+    
+    if hhc_path:
+        print(f"找到.hhc文件: {hhc_path}")
+        toc_data = parse_hhc_file(hhc_path)
+    
+    # 如果.hhc解析失败或为空，扫描所有HTML文件
+    if not toc_data:
+        print("未找到有效的.hhc文件或解析失败，扫描所有HTML文件...")
+        index_file = find_index_file(pub_dir)
+        
+        if index_file:
+            print(f"找到索引文件: {index_file}")
+            # 将索引文件作为根节点
+            toc_data = [{
+                'title': '首页',
+                'url': index_file,
+                'children': scan_all_html_files(pub_dir)
+            }]
+        else:
+            # 直接使用所有HTML文件
+            toc_data = scan_all_html_files(pub_dir)
+    
+    # 确保有至少一个条目
+    if not toc_data:
+        print("警告: 未找到任何内容，创建空目录")
+        toc_data = [{
+            'title': '无内容',
+            'url': '',
+            'children': []
+        }]
+    
+    # 保存为toc.json
+    output_path = os.path.join(pub_dir, 'toc.json')
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(toc_data, f, ensure_ascii=False, indent=2)
+    
+    print(f"已生成目录，共{len(toc_data)}个根节点，保存到: {output_path}")
 
-    # 尝试找到 .hhc / .hhk
-    hhc_rel = find_first_by_ext(root, ('.hhc', '.hhk'))
-    if hhc_rel:
-        hhc_path = os.path.join(root, hhc_rel)
-        print("Found HHC/HHK:", hhc_rel)
-        try:
-            toc = parse_hhc_file(hhc_path, root)
-        except Exception as e:
-            print("Warning: parse hhc failed:", str(e))
-            toc = []
-    else:
-        toc = []
-
-    # 如果解析出空（或没有 .hhc），使用文件树回退
-    if not toc:
-        print("⚠️ 未解析到 .hhc/.hhk 或解析结果为空，使用按文件夹生成的目录回退。")
-        toc = build_tree_from_files(root)
-
-    # 最后：确保是数组（viewer 需要数组）
-    if not isinstance(toc, list):
-        toc = list(toc) if toc else []
-
-    out = os.path.join(root, 'toc.json')
-    with open(out, 'w', encoding='utf-8') as f:
-        json.dump(toc, f, ensure_ascii=False, indent=2)
-    print("Wrote", out, "with", len(toc), "root items.")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
