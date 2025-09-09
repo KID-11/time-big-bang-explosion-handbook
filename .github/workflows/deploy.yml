@@ -46,6 +46,15 @@ jobs:
         run: |
           python3 scripts/hhc_to_json.py publish
 
+      - name: Debug toc.json
+        run: |
+          echo "== 详细分析 toc.json =="
+          ls -la publish/
+          cat publish/toc.json
+          echo "== 查看HTML文件数量 =="
+          find publish -name "*.html" | wc -l
+          find publish -name "*.htm" | wc -l
+
       - name: Copy viewer assets
         run: |
           cp -r viewer/* publish/
@@ -75,11 +84,4 @@ jobs:
             --prod \
             --site="$NETLIFY_SITE_ID"
             
-      - name: Debug toc.json
-        run: |
-          echo "== 详细分析 toc.json =="
-          ls -la publish/
-          cat publish/toc.json
-          echo "== 查看HTML文件数量 =="
-          find publish -name "*.html" | wc -l
-          find publish -name "*.htm" | wc -l
+
