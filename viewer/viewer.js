@@ -4,8 +4,15 @@ async function loadTOC() {
     const data = await res.json();
 
     const toc = document.getElementById('toc');
-    if (!data || !data.length || !data[0].url) {
-      toc.innerHTML = '<p>未找到任何内容。请检查CHM是否正确解压。</p>';
+    
+    // 添加浏览器链接
+    const browserLink = document.createElement('p');
+    browserLink.innerHTML = '<a href="browser.html" target="viewer">浏览 CHM 原始内容</a>';
+    toc.appendChild(browserLink);
+    
+    // 如果没有实际内容，直接加载浏览器
+    if (!data || !data.length || (data[0].title === "无可用内容" && !data[0].url)) {
+      document.getElementById('viewer').src = 'browser.html';
       return;
     }
 
@@ -32,14 +39,11 @@ async function loadTOC() {
     toc.appendChild(makeTree(data));
 
     // 加载第一个页面
-    const initialUrl = data[0].url;
-    if (initialUrl) {
-      document.getElementById('viewer').src = initialUrl;
-      console.log("加载初始页面:", initialUrl);
-    }
+    document.getElementById('viewer').src = 'browser.html';
   } catch (error) {
     console.error("加载目录失败:", error);
-    document.getElementById('toc').innerHTML = '<p>加载目录时出错。请查看控制台获取详情。</p>';
+    document.getElementById('toc').innerHTML = '<p>加载目录时出错</p><p><a href="browser.html" target="viewer">浏览 CHM 原始内容</a></p>';
+    document.getElementById('viewer').src = 'browser.html';
   }
 }
 
