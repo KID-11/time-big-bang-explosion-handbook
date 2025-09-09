@@ -33,8 +33,17 @@ jobs:
           if [ ! -f "source/latest.chm" ]; then
             echo "source/latest.chm not found"; exit 1;
           fi
-          # 使用 extract_chmLib（比 7z 更兼容 CHM）
-          extract_chmLib source/latest.chm publish/
+          # 使用 7z 解压 CHM
+          echo "尝试用 7z 解压 CHM..."
+          mkdir -p publish/chm-content
+          7z x source/latest.chm -opublish/chm-content
+
+          # 显示解压出来的内容
+          echo "7z 解压结果:"
+          find publish/chm-content -type f | head -n 20
+          
+          # 复制前端文件
+          cp viewer/* publish/
 
       - name: Clean invalid files
         run: |
