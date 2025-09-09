@@ -84,4 +84,28 @@ jobs:
             --prod \
             --site="$NETLIFY_SITE_ID"
             
-
+      - name: Super Debug
+        run: |
+          echo "==== CHM 文件信息 ===="
+          ls -la source/latest.chm
+          file source/latest.chm
+          
+          echo "==== 解压目录内容 ===="
+          ls -la publish/
+          
+          echo "==== HTML 文件列表 ===="
+          find publish -name "*.html" -o -name "*.htm" | head -n 20
+          
+          echo "==== 文件总数统计 ===="
+          find publish -type f | wc -l
+          echo "HTML 文件数:"
+          find publish -name "*.html" -o -name "*.htm" | wc -l
+          
+          echo "==== 尝试直接查看一个 HTML 文件 ===="
+          FIRST_HTML=$(find publish -name "*.html" -o -name "*.htm" | head -n 1)
+          if [ -n "$FIRST_HTML" ]; then
+            echo "找到 HTML: $FIRST_HTML"
+            head -n 20 "$FIRST_HTML" || cat "$FIRST_HTML" | head -n 20
+          else
+            echo "未找到任何 HTML 文件!"
+          fi
