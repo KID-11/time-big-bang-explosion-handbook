@@ -146,3 +146,96 @@ jobs:
           find publish/chm-content -type f | sort
           echo "==== CHM-CONTENT 文件类型 ===="
           find publish/chm-content -type f -exec file {} \; | head -n 20
+
+      - name: Create Directory Browser
+        run: |
+          # 创建文件浏览器
+          cat > publish/browser.php << 'EOF'
+          <?php
+          $dir = isset($_GET['dir']) ? $_GET['dir'] : '.';
+          $dir = realpath('./chm-content/' . $dir);
+          
+          // 安全检查：确保只能浏览 chm-content 目录
+          if (!$dir || strpos($dir, realpath('./chm-content')) !== 0) {
+              $dir = realpath('./chm-content');
+          }
+          
+          echo '<html><head><title>CHM Browser</title>';
+          echo '<style>body{font-family:sans-serif;max-width:1000px;margin:0 auto;padding:20px}';
+          echo 'h1{color:#333}ul{list-style:none;padding:0}li{padding:5px;border-bottom:1px solid #eee}';
+          echo 'a{text-decoration:none;color:#0066cc}a:hover{text-decoration:underline}</style></head>';
+          echo '<body><h1>CHM Content Browser</h1>';
+          
+          // 显示当前路径
+          $rel_path = substr($dir, strlen(realpath('./chm-content')));
+          $rel_path = $rel_path ? $rel_path : '/';
+          echo "<p>当前路径: <b>$rel_path</b></p>";
+          
+          // 显示上级目录链接
+          if ($dir != realpath('./chm-content')) {
+              $parent = dirname($rel_path);
+              $parent = $parent == '/' ? '' : $parent;
+              echo "<p><a href='?dir=$parent'>⬆️ 返回上级目录</a></p>";
+          }
+          
+          echo '<ul>';
+          // 显示目录
+          $items = scandir($dir);
+          foreach ($items as $item) {
+              if ($item == '.' || $item == '..') continue;
+              
+              $full_path = $dir . '/' . $item;
+              $item_path = $rel_path == '/' ? $item : $rel_path . '/' . $item;
+              
+              if (is_dir($full_path)) {
+                  echo "<li>📁 <a href='?dir=$item_path'>$item/</a></li>";
+              } else {
+                  $file_url = 'chm-content' . $item_path;
+                  echo "<li>📄 <a href='$file_url' target='_blank'>$item</a></li>";
+              }
+          }
+          echo '</ul></body></html>';
+          EOF
+          
+          # 创建一个兼容的静态版本
+          cat > publish/browser.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>CHM 内容浏览器</title>
+            <style>
+              body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+              h1 { color: #333; }
+              .note { background: #f8f9fa; padding: 10px; border-left: 4px solid #0066cc; }
+              pre { background: #f1f1f1; padding: 10px; overflow: auto; }
+            </style>
+          </head>
+          <body>
+            <h1>CHM 内容浏览器</h1>
+            
+            <div class="note">
+              <p>这个 CHM 文件解压后的目录结构如下:</p>
+            </div>
+            
+            <pre>
+          publish/chm-content/
+          ├── $WWAssociativeLinks/
+          ├── $WWKeywordLinks/
+          └── cppreference.com
+            </pre>
+            
+            <p>目录内容可能是 <code>cppreference.com</code> 或包含在 <code>$WWKeywordLinks</code> 子目录中。</p>
+            
+            <p>建议:</p>
+            <ol>
+              <li>尝试打开 <a href="chm-content/cppreference.com" target="_blank">cppreference.com</a> 文件</li>
+              <li>如果是目录，请检查 GitHub Actions 日志获取更多信息</li>
+              <li>考虑提供一个标准格式的 CHM 文件进行测试</li>
+            </ol>
+          </body>
+          </html>
+          EOF
+          
+          # 更新主页链接到浏览器
+          sed -i 's/<nav id="toc"><\/nav>/<nav id="toc"><p><a href="browser.html" target="viewer">浏览 CHM 原始内容<\/a><\/p><\/nav>/' publish/index.html
