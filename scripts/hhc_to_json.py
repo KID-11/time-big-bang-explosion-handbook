@@ -14,12 +14,28 @@ def log(msg):
 def find_all_html_files(root_dir):
     """查找所有 HTML 文件"""
     html_files = []
-    for ext in ['*.htm', '*.html']:
-        pattern = os.path.join(root_dir, '**', ext)
-        html_files.extend(glob.glob(pattern, recursive=True))
     
-    # 相对路径转换
-    return [os.path.relpath(f, root_dir).replace('\\', '/') for f in html_files]
+    # 特别检查 chm-content 子目录
+    chm_content = os.path.join(root_dir, 'chm-content')
+    if os.path.exists(chm_content):
+        log(f"检查 chm-content 子目录")
+        for ext in ['*.htm', '*.html']:
+            pattern = os.path.join(chm_content, '**', ext)
+            found = glob.glob(pattern, recursive=True)
+            log(f"在 chm-content 中找到 {len(found)} 个 {ext} 文件")
+            for f in found:
+                rel_path = os.path.relpath(f, root_dir).replace('\\', '/')
+                html_files.append(rel_path)
+    
+    # 也检查根目录，但排除我们自己的前端文件
+    for ext in ['*.htm', '*.html']:
+        pattern = os.path.join(root_dir, ext)
+        for f in glob.glob(pattern):
+            if os.path.basename(f) != 'index.html':  # 排除我们的前端
+                rel_path = os.path.relpath(f, root_dir).replace('\\', '/')
+                html_files.append(rel_path)
+    
+    return html_files
 
 def create_simple_toc(html_files, root_dir):
     """从 HTML 文件创建简单目录"""
@@ -75,7 +91,7 @@ def main():
     log(f"找到 {len(html_files)} 个 HTML 文件")
     
     if len(html_files) > 0:
-        for i, html in enumerate(html_files[:5]):
+        for i, html in enumerate(html_files[:10]):
             log(f"示例文件 {i+1}: {html}")
     else:
         log("警告: 未找到任何 HTML 文件!")
@@ -85,20 +101,24 @@ def main():
     
     if html_files:
         # 优先查找常见首页
-        index_candidates = ['index.htm', 'index.html', 'default.htm', 'default.html', 'home.htm', 'home.html']
-        index_file = None
+        index_candidates = [
+            'chm-content/index.htm', 'chm-content/index.html', 
+            'chm-content/default.htm', 'chm-content/default.html'
+        ]
         
+        index_file = None
         for candidate in index_candidates:
             if candidate in html_files:
                 index_file = candidate
+                log(f"找到索引页: {index_file}")
                 break
         
         if not index_file and html_files:
             index_file = html_files[0]
+            log(f"使用第一个HTML文件作为索引: {index_file}")
         
         # 创建根节点
         if index_file:
-            log(f"使用 {index_file} 作为首页")
             root_title = extract_title_from_html(os.path.join(publish_dir, index_file)) or "目录"
             
             # 构建目录树
