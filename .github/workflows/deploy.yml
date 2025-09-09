@@ -28,19 +28,40 @@ jobs:
           rm -rf publish
           mkdir -p publish
 
-      - name: Extract CHM → publish/
+      - name: Extract CHM with multiple methods
         run: |
+          # 先确认文件存在
           if [ ! -f "source/latest.chm" ]; then
             echo "source/latest.chm not found"; exit 1;
           fi
-          # 使用 7z 解压 CHM
-          echo "尝试用 7z 解压 CHM..."
+          
+          # 保存原始大小
+          ORIG_SIZE=$(stat -c%s "source/latest.chm")
+          echo "CHM文件大小: $ORIG_SIZE 字节"
+          
+          # 方法1: 用7z解压
           mkdir -p publish/chm-content
           7z x source/latest.chm -opublish/chm-content
-
-          # 显示解压出来的内容
-          echo "7z 解压结果:"
-          find publish/chm-content -type f | head -n 20
+          
+          # 检查结果
+          CONTENT_COUNT=$(find publish/chm-content -type f | wc -l)
+          echo "7z解压后文件数: $CONTENT_COUNT"
+          
+          # 如果没有内容文件，尝试方法2
+          if [ "$CONTENT_COUNT" -lt 2 ]; then
+            echo "7z解压失败，尝试用chmextract..."
+            # 安装额外工具
+            sudo apt-get install -y chm-utils 
+            mkdir -p publish/chm-extract
+            extract_chmLib source/latest.chm publish/chm-extract
+            
+            # 如果有内容，复制到主目录
+            EXTRACT_COUNT=$(find publish/chm-extract -type f | wc -l)
+            echo "chmextract解压后文件数: $EXTRACT_COUNT"
+            if [ "$EXTRACT_COUNT" -gt 0 ]; then
+              cp -r publish/chm-extract/* publish/chm-content/
+            fi
+          fi
           
           # 复制前端文件
           cp viewer/* publish/
@@ -118,3 +139,10 @@ jobs:
           else
             echo "未找到任何 HTML 文件!"
           fi
+          
+      - name: Inspect chm-content
+        run: |
+          echo "==== CHM-CONTENT 目录结构 ===="
+          find publish/chm-content -type f | sort
+          echo "==== CHM-CONTENT 文件类型 ===="
+          find publish/chm-content -type f -exec file {} \; | head -n 20
